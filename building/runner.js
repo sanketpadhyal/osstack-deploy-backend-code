@@ -70,6 +70,17 @@ export async function runDeployment(deps, options) {
 }
 
 async function executeDeploymentSteps(deps, options, startedAt, buildDir, sourceDir, supabaseAdmin, deploymentBucket) {
+  const { data: userProfile } = await supabaseAdmin.from('osstack_profiles').select('*').eq('id', options.userId).maybeSingle()
+  const maxBuildMinutes = userProfile?.build_minutes ?? 100
+  const maxStorageBytes = Number(userProfile?.storage_bytes ?? 1073741824)
+
+  const { data: userProjects } = await supabaseAdmin.from('osstack_projects').select('*').eq('user_id', options.userId)
+  const totalBuildMinutes = (userProjects ?? []).reduce((total, p) => total + Number(p.build_minutes ?? 0), 0)
+
+  if (totalBuildMinutes >= maxBuildMinutes) {
+    throw new Error(`Build minutes limit reached (${maxBuildMinutes}m/${maxBuildMinutes}m). Upgrade your plan to run more builds.`)
+  }
+
   await ensureDeploymentBucket(supabaseAdmin, deploymentBucket)
   await emit(deps, options, 'QUEUED', 'Deployment created')
   await emit(deps, options, 'CLONING', `Cloning ${options.repositoryLabel ?? options.repositoryFullName}`)
@@ -114,6 +125,14 @@ async function executeDeploymentSteps(deps, options, startedAt, buildDir, source
   await emit(deps, options, 'UPLOADING', `Uploading ${path.basename(outputDir)}/`)
   const storagePrefix = `deployments/${options.projectId}/${options.deploymentId}`
   const storageBytes = await uploadDirectoryToStorage(supabaseAdmin, deploymentBucket, outputDir, storagePrefix)
+
+  const otherProjectsStorage = (userProjects ?? [])
+    .filter((p) => p.id !== options.projectId)
+    .reduce((total, p) => total + Number(p.storage_bytes ?? 0), 0)
+
+  if (otherProjectsStorage + storageBytes > maxStorageBytes) {
+    throw new Error(`Storage limit exceeded. Upgrade your plan to store more files.`)
+  }
 
   const liveUrl = deps.getDeploymentPublicUrl(options.slug)
   const buildMinutes = Math.max(1, Math.ceil((Date.now() - startedAt) / 60000))

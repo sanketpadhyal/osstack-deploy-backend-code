@@ -398,8 +398,28 @@ app.post('/api/deployments', requireSession, async (request, response, next) => 
       return
     }
 
+    const { projects, usage, quotas } = await getUserUsageAndQuotas(request.user.id)
+
+    if (usage.buildMinutes >= quotas.buildMinutes) {
+      response.status(403).json({
+        ok: false,
+        error: `Build minutes limit reached (${quotas.buildMinutes}m/${quotas.buildMinutes}m). Upgrade your plan to run more builds.`,
+      })
+      return
+    }
+
+    const existingProject = projects.find((p) => p.slug === requestedSlug)
+
+    if (!existingProject && projects.length >= quotas.maxProjects) {
+      response.status(403).json({
+        ok: false,
+        error: `Live websites limit reached (${quotas.maxProjects}/${quotas.maxProjects}). Upgrade your plan to deploy more websites.`,
+      })
+      return
+    }
+
     const admin = requireSupabaseAdmin()
-    const { data: existingProject, error: existingError } = await admin
+    const { data: existingProjectRow, error: existingError } = await admin
       .from('osstack_projects')
       .select('id')
       .eq('slug', requestedSlug)
@@ -409,7 +429,7 @@ app.post('/api/deployments', requireSession, async (request, response, next) => 
       throw existingError
     }
 
-    if (existingProject) {
+    if (existingProjectRow) {
       response.status(409).json({ ok: false, error: 'Project name already exists. Choose another name.', slug: requestedSlug })
       return
     }
@@ -512,15 +532,44 @@ app.post('/api/deployments/folder', requireSession, async (request, response, ne
       return
     }
 
+    const { projects, usage, quotas } = await getUserUsageAndQuotas(request.user.id)
+
+    if (usage.buildMinutes >= quotas.buildMinutes) {
+      response.status(403).json({
+        ok: false,
+        error: `Build minutes limit reached (${quotas.buildMinutes}m/${quotas.buildMinutes}m). Upgrade your plan to run more builds.`,
+      })
+      return
+    }
+
+    const existingProject = projects.find((p) => p.slug === requestedSlug)
+
+    if (!existingProject && projects.length >= quotas.maxProjects) {
+      response.status(403).json({
+        ok: false,
+        error: `Live websites limit reached (${quotas.maxProjects}/${quotas.maxProjects}). Upgrade your plan to deploy more websites.`,
+      })
+      return
+    }
+
+    const incomingStorage = files.reduce((acc, f) => acc + (f.content ? Buffer.from(f.content, 'base64').byteLength : 0), 0)
+    if (usage.storageBytes + incomingStorage > quotas.storageBytes) {
+      response.status(403).json({
+        ok: false,
+        error: `Storage limit exceeded (${formatBytes(quotas.storageBytes)} max). Upgrade your plan to store more files.`,
+      })
+      return
+    }
+
     const admin = requireSupabaseAdmin()
-    const { data: existingProject, error: existingError } = await admin
+    const { data: existingProjectRow, error: existingError } = await admin
       .from('osstack_projects')
       .select('id')
       .eq('slug', requestedSlug)
       .maybeSingle()
 
     if (existingError) throw existingError
-    if (existingProject) {
+    if (existingProjectRow) {
       response.status(409).json({ ok: false, error: 'Project name already exists. Choose another name.', slug: requestedSlug })
       return
     }
@@ -637,6 +686,24 @@ app.post('/api/projects', requireSession, async (request, response, next) => {
 
     if (!name) {
       response.status(400).json({ ok: false, error: 'Project name is required.' })
+      return
+    }
+
+    const { projects, usage, quotas } = await getUserUsageAndQuotas(request.user.id)
+
+    if (usage.buildMinutes >= quotas.buildMinutes) {
+      response.status(403).json({
+        ok: false,
+        error: `Build minutes limit reached (${quotas.buildMinutes}m/${quotas.buildMinutes}m). Upgrade your plan to run more builds.`,
+      })
+      return
+    }
+
+    if (projects.length >= quotas.maxProjects) {
+      response.status(403).json({
+        ok: false,
+        error: `Live websites limit reached (${quotas.maxProjects}/${quotas.maxProjects}). Upgrade your plan to deploy more websites.`,
+      })
       return
     }
 
@@ -931,6 +998,32 @@ async function getDashboardForUser(userId) {
     projects,
     deploymentLogs: deployments,
     previews: [],
+  }
+}
+
+async function getUserUsageAndQuotas(userId) {
+  const user = await getProfileById(userId)
+
+  if (!user) {
+    throw new Error('Unauthorized')
+  }
+
+  const projects = await getProjectsForUser(userId)
+  const liveProjects = projects.filter((project) => project.status === 'live')
+  const storageBytes = projects.reduce((total, project) => total + Number(project.storageBytes ?? 0), 0)
+  const bandwidthBytes = projects.reduce((total, project) => total + Number(project.bandwidthBytes ?? 0), 0)
+  const buildMinutes = projects.reduce((total, project) => total + Number(project.buildMinutes ?? 0), 0)
+
+  return {
+    user,
+    projects,
+    usage: {
+      liveProjectsCount: liveProjects.length,
+      storageBytes,
+      bandwidthBytes,
+      buildMinutes,
+    },
+    quotas: user.quotas,
   }
 }
 

@@ -100,6 +100,26 @@ export async function serveDeploymentFile(supabaseAdmin, bucketName, slug, reque
   if (projectError) throw projectError
   if (!projectRow) { response.status(404).send('Deployment not found.'); return }
 
+  const { data: userProfile } = await supabaseAdmin
+    .from('osstack_profiles')
+    .select('bandwidth_bytes')
+    .eq('id', projectRow.user_id)
+    .maybeSingle()
+
+  const maxBandwidth = Number(userProfile?.bandwidth_bytes ?? 10737418240)
+
+  const { data: userProjects } = await supabaseAdmin
+    .from('osstack_projects')
+    .select('bandwidth_bytes')
+    .eq('user_id', projectRow.user_id)
+
+  const totalBandwidth = (userProjects ?? []).reduce((total, p) => total + Number(p.bandwidth_bytes ?? 0), 0)
+
+  if (totalBandwidth >= maxBandwidth) {
+    response.status(509).send('Bandwidth limit exceeded (10 GB max). Upgrade your plan to continue serving traffic.')
+    return
+  }
+
   const { data: deploymentRow, error: deploymentError } = await supabaseAdmin
     .from('osstack_deployments')
     .select('*')
@@ -148,7 +168,7 @@ export async function serveDeploymentFile(supabaseAdmin, bucketName, slug, reque
         .download(`deployments/${projectRow.id}/${deploymentRow.id}/index.html`)
 
       if (!indexError && indexBlob) {
-        await sendFile(response, indexBlob, 'index.html', slug, options)
+        await sendFile(response, indexBlob, 'index.html', slug, options, supabaseAdmin, projectRow)
         return
       }
     }
@@ -157,7 +177,7 @@ export async function serveDeploymentFile(supabaseAdmin, bucketName, slug, reque
     return
   }
 
-  await sendFile(response, fileBlob, requestedFile, slug, options)
+  await sendFile(response, fileBlob, requestedFile, slug, options, supabaseAdmin, projectRow)
 }
 
 async function listFiles(directory) {
@@ -177,8 +197,18 @@ function shouldServeIndexFallback(requestedFile) {
   return !ext || ['.html', '.htm'].includes(ext.toLowerCase())
 }
 
-async function sendFile(response, fileBlob, requestedFile, slug, options) {
+async function sendFile(response, fileBlob, requestedFile, slug, options, supabaseAdmin, projectRow) {
   const fileBuffer = Buffer.from(await fileBlob.arrayBuffer())
+
+  if (supabaseAdmin && projectRow) {
+    supabaseAdmin
+      .from('osstack_projects')
+      .update({ bandwidth_bytes: Number(projectRow.bandwidth_bytes ?? 0) + fileBuffer.byteLength })
+      .eq('id', projectRow.id)
+      .then(() => {})
+      .catch(() => {})
+  }
+
   const ext = path.extname(requestedFile).toLowerCase()
   const assetBase = options.assetBase ?? `/apps/${slug}/`
 
