@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sanketpadhyal/osstack/main/src/assets/readmelogoo.png" alt="oSStack logo" width="96" />
+  <img src="readmelogoo.png" alt="oSStack logo" width="96" />
 </p>
 
 <h1 align="center">oSStack Backend Engine</h1>
