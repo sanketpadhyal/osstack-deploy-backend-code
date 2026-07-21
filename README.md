@@ -13,7 +13,7 @@
   |
   <a href="https://osstack.netlify.app/dashboard">Dashboard</a>
   |
-  <a href="https://github.com/sanketpadhyal/osstack">Frontend Repository</a>
+  <a href="https://github.com/sanketpadhyal/osstack-deploy">Frontend Repository</a>
 </p>
 
 ## Overview
